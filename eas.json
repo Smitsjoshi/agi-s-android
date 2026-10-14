@@ -1,0 +1,58 @@
+{
+  "//": [
+    "Build profiles for EAS, Expo's cloud build service.",
+    "",
+    "WHY THIS FILE EXISTS: `expo start` runs a development server on your",
+    "computer and the QR code points at it. Close the terminal and the app",
+    "stops working. These profiles produce real installable apps that keep",
+    "working with the computer off.",
+    "",
+    "THE ANDROID ONE IS THE USEFUL ONE TODAY. `preview` builds an APK you can",
+    "download and install directly -- no Play Store, no account, no cost. It",
+    "bundles `extra.apiUrl` from app.json, so it talks to the deployed server",
+    "rather than to this machine.",
+    "",
+    "THE iOS ONE NEEDS AN APPLE DEVELOPER ACCOUNT ($99/year). Apple does not",
+    "permit installing an app on an iPhone without one. That is their rule and",
+    "no configuration here changes it.",
+    "",
+    "Builds run on Expo's machines, which is why iOS is possible at all from",
+    "Windows -- the compile happens on their Mac, not yours."
+  ],
+
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
+  },
+
+  "build": {
+    "development": {
+      "//": "A dev client: like Expo Go but with this project's own native modules. Only needed if a dependency stops working in Expo Go.",
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+
+    "preview": {
+      "//": "THE ONE TO USE. Android produces an .apk you can install by tapping it. iOS produces a build for TestFlight, which requires the Apple account.",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
+
+    "production": {
+      "//": "Store submission. Android builds an .aab, which is what Google Play requires and which you cannot install directly.",
+      "autoIncrement": true,
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  },
+
+  "submit": {
+    "production": {}
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "AGI-S",
+    "slug": "agi-s",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "agis",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": false,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#05060b"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.agis.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.agis.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#05060b"
+      },
+      "edgeToEdgeEnabled": true,
+      "versionCode": 1
+    },
+    "extra": {
+      "apiUrl": "https://agi-s.onrender.com"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ],
+    "icon": "./assets/icon.png",
+    "web": {
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}

@@ -1,0 +1,208 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Build a standalone Android APK, on GitHub's machines.
+#
+# This repository holds ONLY the mobile app. It is public so that the release
+# it publishes can be downloaded by anyone -- a release in a private repository
+# needs a token to fetch, which is why the download link on the website 404'd.
+# No server code, no keys, nothing that is not already shipped to a phone.
+#
+# ## Why here
+#
+# Compiling an APK needs a JDK, the Android SDK and Gradle — about 10GB of
+# tooling. GitHub's ubuntu runners ship with all of it already installed, and
+# they are free. So the build happens here rather than on anyone's laptop, and
+# rather than on Expo's build service, which needs an account.
+#
+# ## What comes out
+#
+# A real, standalone .apk. It does not need Expo Go, or any other app, to run.
+# `expo prebuild` is used only as a code generator: it writes the native
+# `android/` project that React Native needs, and Gradle then builds it exactly
+# as it would any other Android app. Nothing of Expo's infrastructure is
+# involved at build time or at run time.
+#
+# ## Why a debug-signed build
+#
+# A release build must be signed with a keystore, and a keystore is a secret
+# that has to be created, stored, and used identically forever — because
+# Android refuses to update an app whose signature changed. Generating one per
+# build produces APKs that cannot upgrade each other, which is worse than
+# useless, and storing one properly means setting up repository secrets.
+#
+# The Android debug key is universal and fixed, so every build here signs with
+# the same identity and installs over the last one. The cost is that Google Play
+# will not accept a debug-signed APK — which is correct, because a Play release
+# should be signed with a key only the owner holds. That is a decision for the
+# day a Play listing exists, not a reason to block a download link today.
+#
+# ## Running it
+#
+# Actions tab → "Build Android APK" → Run workflow. About 10–15 minutes. It
+# publishes a GitHub Release, so the download URL is permanent and the website
+# can link to it directly.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Build Android APK
+
+on:
+  # Any push to main builds and publishes. This repository exists only to hold
+  # the app, so a push here always means "there is a new version" -- which makes
+  # hunting for a button in the Actions tab an unnecessary step.
+  push:
+    branches: [main]
+
+  # And manually, when you want to rebuild without changing anything.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for the release (e.g. 1.0.1)'
+        required: false
+        default: '1.0.0'
+
+# Needed to publish a release. Without it the build succeeds and the upload
+# fails at the very end, which is the most annoying possible place to fail.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          # No `cache: npm`. That option REQUIRES a lockfile and fails the job
+          # outright when there is none -- which is what happened: the run died
+          # in eight seconds, before a single dependency was fetched. This
+          # project has no committed lockfile because resolving the React Native
+          # tree is slow enough to be unreliable to generate offline, and the
+          # install step below already tolerates its absence. Losing the cache
+          # costs about a minute per build; requiring it cost the whole build.
+
+      # React Native's Gradle plugin needs 17. The runner has several JDKs; this
+      # pins the one that works rather than inheriting whichever is default.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        # `npm ci` is preferred because it installs the lockfile exactly, but it
+        # refuses outright when there is no lockfile -- so `npm install` is the
+        # fallback rather than a failure. `--legacy-peer-deps` because the Expo
+        # SDK's own pinned versions do not always satisfy every package's peer
+        # range, and npm treats that as fatal by default.
+        run: npm ci || npm install --legacy-peer-deps
+
+      - name: Generate the native Android project
+        # Code generation only — this writes android/ from app.json. The result
+        # is an ordinary Gradle project.
+        run: npx expo prebuild --platform android --no-install --clean
+
+      - name: Pin Kotlin to the version the Compose compiler demands
+        # expo-build-properties sets this during prebuild. This is the belt to
+        # its braces, because the failure is expensive: the mismatch does not
+        # surface until ':expo-modules-core:compileDebugKotlin', four minutes
+        # in, and the error names Kotlin rather than the thing that pinned it.
+        #
+        # A Gradle PROPERTY, not an edit to build.gradle. The Expo template
+        # writes `kotlinVersion = findProperty('android.kotlinVersion') ?:
+        # '1.9.24'`, so there is no literal version in that file to rewrite --
+        # setting the property is the mechanism the template already provides,
+        # and it cannot be invalidated by a change to the template's wording.
+        run: |
+          set -eu
+          PROPS=android/gradle.properties
+
+          # Drop any existing declaration so this cannot end up set twice with
+          # different values, where the last one silently wins.
+          sed -i '/^android\.kotlinVersion=/d' "$PROPS"
+          echo 'android.kotlinVersion=1.9.25' >> "$PROPS"
+
+          echo "--- kotlin-related properties now in effect ---"
+          grep -n 'kotlin' "$PROPS" || true
+
+      - name: Build
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+
+          # assembleRelease, NOT assembleDebug.
+          #
+          # A debug build does not contain the JavaScript. It expects to fetch
+          # it from a Metro dev server on the developer's machine at
+          # localhost:8081, so installing one on a phone produces a red screen
+          # reading "Could not connect to development server" -- which is the
+          # build working exactly as intended and completely useless.
+          #
+          # A release build runs the bundler and embeds the JS in the APK, so it
+          # is self-contained and needs nothing running anywhere.
+          ./gradlew assembleRelease --no-daemon --stacktrace
+
+      - name: Name it something a person would recognise
+        run: |
+          VERSION="${{ github.event.inputs.version || '1.0.0' }}"
+          mkdir -p out
+          cp android/app/build/outputs/apk/release/app-release.apk "out/agi-s.apk"
+          ls -lh out/
+          echo "SIZE=$(du -h out/agi-s.apk | cut -f1)" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check it is actually signed and self-contained
+        # An unsigned APK installs on nothing, and a release APK missing its JS
+        # bundle shows the same red screen a debug build does. Both are silent
+        # at build time and obvious only once somebody has downloaded it.
+        run: |
+          set -eu
+          APK=out/agi-s.apk
+
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -r | head -1)
+          "$APKSIGNER" verify --print-certs "$APK" | head -5
+
+          # The JS bundle is the file a release build adds and a debug build
+          # does not. If it is missing, the app cannot run offline.
+          if unzip -l "$APK" | grep -q 'assets/index.android.bundle'; then
+            echo "JS bundle is embedded — the app runs without a dev server."
+          else
+            echo "::error::No JS bundle in the APK. This build would show the dev-server error."
+            exit 1
+          fi
+
+      # Kept for 90 days, and downloadable from the run page even if the release
+      # step is ever removed.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agi-s-apk
+          path: out/agi-s.apk
+          retention-days: 90
+
+      - name: Publish a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${VERSION}"
+
+          # Re-running the same version should replace the build rather than
+          # fail, which is what happens the first time somebody fixes a bug and
+          # rebuilds without thinking to bump the number.
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+
+          gh release create "$TAG" out/agi-s.apk \
+            --title "AGI-S $VERSION for Android" \
+            --notes "Android app, ${SIZE}.
+
+          **Install:** download \`agi-s.apk\` below on your phone and tap it. Android will warn about installing outside the Play Store — that warning appears for any app not from the store. Allow it.
+
+          **This build does not update itself.** When AGI-S changes, download it again. For updates that arrive on their own, install the web version instead: open the site in Chrome and choose *Install app*.
+
+          Self-contained: the JavaScript is bundled inside, so it needs nothing running on a computer.
+
+          Signed with the Android debug key, so each build installs over the last. Not accepted by Google Play, which needs a release key held by the owner." \
+            --latest
+
+          echo "Download URL (permanent, always the newest):"
+          echo "https://github.com/${{ github.repository }}/releases/latest/download/agi-s.apk"
